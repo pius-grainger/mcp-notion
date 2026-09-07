@@ -117,9 +117,10 @@ Writing a construct outside the subset — tables, images, raw HTML — fails th
 entire call with an error naming the construct and the line number. There are
 no partial writes and no silent drops.
 
-Two Notion limits are handled inside `client.py` rather than pushed onto the
-caller: appends are chunked at 100 blocks per request, and any text run longer
-than 2000 characters is split across multiple `rich_text` objects.
+Two Notion limits are handled by the server rather than pushed onto the
+caller: appends are chunked at 100 blocks per request, in `client.py`, and any
+text run longer than 2000 characters is split across multiple `rich_text`
+objects, in `markdown.py` where those objects are constructed.
 
 ## Error handling
 
