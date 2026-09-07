@@ -64,6 +64,12 @@ Read:
 - `get_database_schema(ref)` — property names and types. The model calls this
   before filtering or writing.
 - `query_database(ref, filter=None, sort=None, limit=...)` — flat rows.
+  `filter` is a dict of property name to value, combined with AND, using the
+  equality operator appropriate to each property's type; `properties.py`
+  translates it against the schema into Notion's filter object. `sort` is
+  `{"property": name, "direction": "asc"|"desc"}`. Notion's raw filter
+  syntax is deliberately not exposed; a workflow needing OR or nesting is a
+  reason to revisit this, not to leak the API shape through the tool.
 - `get_page(ref)` — properties plus body as markdown.
 - `search(query, kind=None)` — title matches across shared content.
 
