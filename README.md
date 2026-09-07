@@ -53,6 +53,11 @@ fenced code, quotes, dividers. Reading an unsupported block yields
 `<!-- unsupported: TYPE -->`. Writing an unsupported construct — tables, images,
 raw HTML — fails the whole call, naming the construct and the line.
 
+Inline markup is one-way. Bold, italic, code, and links are rendered as
+markdown when reading, but written back as literal characters: appending
+`**bold**` writes those eight characters, not bold text. A half-correct inline
+parser would silently corrupt text, which is worse than a visible asterisk.
+
 ## Tests
 
 ```bash
