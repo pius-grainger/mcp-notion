@@ -189,6 +189,33 @@ def test_raw_html_is_rejected():
     assert "html" in caught.value.message.lower()
 
 
+def test_html_after_a_bullet_marker_is_rejected_with_its_line_number():
+    with pytest.raises(MarkdownError) as caught:
+        markdown_to_blocks("fine\n\n- <div>x</div>")
+    assert caught.value.line == 3
+    assert "html" in caught.value.message.lower()
+
+
+def test_html_after_a_quote_marker_is_rejected_with_its_line_number():
+    with pytest.raises(MarkdownError) as caught:
+        markdown_to_blocks("fine\n\n> <div>x</div>")
+    assert caught.value.line == 3
+    assert "html" in caught.value.message.lower()
+
+
+def test_a_table_row_after_a_bullet_marker_is_rejected_with_its_line_number():
+    with pytest.raises(MarkdownError) as caught:
+        markdown_to_blocks("fine\n\n- | a | b |")
+    assert caught.value.line == 3
+    assert "table" in caught.value.message.lower()
+
+
+def test_a_pipe_inside_a_fenced_code_block_is_not_treated_as_a_table():
+    blocks = markdown_to_blocks("```text\n| a | b |\n```")
+    assert blocks[0]["type"] == "code"
+    assert blocks[0]["code"]["rich_text"][0]["text"]["content"] == "| a | b |"
+
+
 def test_an_unterminated_fence_is_rejected():
     with pytest.raises(MarkdownError):
         markdown_to_blocks("```python\nx = 1")

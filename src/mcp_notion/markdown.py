@@ -92,6 +92,27 @@ _QUOTE = re.compile(r"^>\s?(.*)$")
 _DIVIDER = re.compile(r"^\s*(-{3,}|\*{3,}|_{3,})\s*$")
 _FENCE = re.compile(r"^\s*```(\w*)\s*$")
 
+# Same precedence as the dispatch below (TODO before BULLET, so a checkbox
+# marker is stripped whole rather than leaving a stray "[ ]" as content).
+# DIVIDER is excluded: it consumes the entire line, leaving no room for a
+# table or HTML tag to hide behind it.
+_PREFIX_PATTERNS = (_HEADING, _TODO, _BULLET, _NUMBERED, _QUOTE)
+
+
+def _strip_block_prefix(line: str) -> str:
+    """Return the line's content past any recognized block-level marker.
+
+    The table and raw-HTML patterns in _UNSUPPORTED are anchored to line-start,
+    so scanning the raw line misses a table or tag written after a bullet,
+    numbered, to-do, quote, or heading marker (e.g. "- <div>x</div>"). Stripping
+    the marker first lets those anchors see the real start of the content.
+    """
+    for pattern in _PREFIX_PATTERNS:
+        match = pattern.match(line)
+        if match:
+            return match.group(match.re.groups)
+    return line
+
 
 class MarkdownError(Exception):
     """Raised when markdown contains a construct outside the supported subset.
@@ -155,8 +176,9 @@ def markdown_to_blocks(markdown: str) -> list[dict]:
             blocks.append(_block("code", rich_text=rich_text("\n".join(body)), language=language))
             continue
 
+        scan_target = _strip_block_prefix(line)
         for pattern, name in _UNSUPPORTED:
-            if pattern.search(line):
+            if pattern.search(scan_target):
                 raise MarkdownError(
                     f"Unsupported markdown: {name}. Supported constructs are headings 1-3, "
                     "paragraphs, bulleted and numbered lists, to-dos, fenced code, quotes, "
