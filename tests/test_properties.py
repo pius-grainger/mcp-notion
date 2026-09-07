@@ -50,6 +50,47 @@ def test_formula_and_rollup_unwrap_to_their_inner_value():
     assert read_value({"type": "rollup", "rollup": {"type": "number", "number": 7}}) == 7
 
 
+def test_rollup_with_array_inner_type_flattens_nested_properties():
+    # Rollup over a relation property: inner type is "array" with raw relation properties
+    result = read_value({"type": "rollup", "rollup": {"type": "array",
+        "array": [{"type": "relation", "relation": [{"id": "11111111-1111-1111-1111-111111111111"}]}]}})
+    # Result should be a list of flattened properties, no bare UUIDs
+    assert result == ["1 related items"]
+    assert "11111111-1111-1111-1111-111111111111" not in str(result)
+
+
+def test_rollup_with_empty_array_inner_type():
+    result = read_value({"type": "rollup", "rollup": {"type": "array", "array": []}})
+    assert result == []
+
+
+def test_rollup_with_date_inner_type_bare_start():
+    result = read_value({"type": "rollup", "rollup": {"type": "date",
+        "date": {"start": "2026-09-07", "end": None}}})
+    assert result == "2026-09-07"
+
+
+def test_rollup_with_date_inner_type_range():
+    result = read_value({"type": "rollup", "rollup": {"type": "date",
+        "date": {"start": "2026-09-07", "end": "2026-09-09"}}})
+    assert result == {"start": "2026-09-07", "end": "2026-09-09"}
+
+
+def test_rollup_with_date_inner_type_none():
+    result = read_value({"type": "rollup", "rollup": {"type": "date", "date": None}})
+    assert result is None
+
+
+def test_formula_and_rollup_scalar_inner_types_pass_through():
+    # Ensure scalar types still pass through unchanged for formulas and rollups
+    assert read_value({"type": "formula", "formula": {"type": "string", "string": "result"}}) == "result"
+    assert read_value({"type": "formula", "formula": {"type": "number", "number": 42}}) == 42
+    assert read_value({"type": "formula", "formula": {"type": "boolean", "boolean": True}}) is True
+    assert read_value({"type": "rollup", "rollup": {"type": "string", "string": "text"}}) == "text"
+    assert read_value({"type": "rollup", "rollup": {"type": "number", "number": 99}}) == 99
+    assert read_value({"type": "rollup", "rollup": {"type": "boolean", "boolean": False}}) is False
+
+
 def test_timestamps_pass_through():
     assert read_value({"type": "created_time", "created_time": "2026-09-07T00:00:00.000Z"}) == "2026-09-07T00:00:00.000Z"
 

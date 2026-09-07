@@ -33,7 +33,16 @@ def read_value(prop: dict) -> object:
         return f"{len(value or [])} related items"
     if kind in ("formula", "rollup"):
         inner = (value or {}).get("type") or ""
-        return (value or {}).get(inner)
+        inner_value = (value or {}).get(inner)
+        if inner == "array":
+            # Rollup over relation/people/files: recursively flatten nested properties
+            return [read_value(item) for item in inner_value or []]
+        if inner == "date":
+            # Flatten date values the same way as top-level date property
+            if not inner_value:
+                return None
+            return {"start": inner_value.get("start"), "end": inner_value.get("end")} if inner_value.get("end") else inner_value.get("start")
+        return inner_value
     return f"<unsupported property type: {kind}>"
 
 
