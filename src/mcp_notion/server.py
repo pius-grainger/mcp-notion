@@ -201,6 +201,127 @@ def search(query: str, kind: str | None = None) -> list[dict]:
     ]
 
 
+@mcp.tool()
+def create_page(
+    parent_ref: str, title: str, markdown: str | None = None, properties: dict | None = None
+) -> dict:
+    """
+    Create a page, either as a row in a database or as a subpage of another page.
+    parent_ref: an alias, a notion.so URL, an id, or an exact title.
+    title: the new page's title.
+    markdown: optional page body. Headings 1-3, paragraphs, bulleted and
+      numbered lists, to-dos, fenced code, quotes, and dividers are supported;
+      anything else fails the call before Notion is touched.
+    properties: for a database parent only, property name -> value. Call
+      get_database_schema first for the valid names.
+    """
+    try:
+        kind, parent_id = _get_resolver().any(parent_ref)
+        blocks = markdown_to_blocks(markdown) if markdown else []
+    except (ResolutionError, MarkdownError, RuntimeError) as e:
+        return _fail(e)
+
+    if kind == "database":
+        node = _schema_of(parent_id)
+        if "error" in node:
+            return node
+        schema = fmt.schema(node)
+        title_name = next((name for name, prop in schema.items() if prop["type"] == "title"), None)
+        if title_name is None:
+            return {"error": "That database has no title property, so a page cannot be created in it."}
+        try:
+            payload = write_properties(properties or {}, schema)
+        except PropertyError as e:
+            return _fail(e)
+        payload[title_name] = write_value(title, "title", title_name)
+        parent = {"database_id": parent_id}
+    else:
+        if properties:
+            return {"error": "properties apply only to database rows. A subpage takes a title and a body."}
+        # A page-parented page has one property, keyed by the literal "title".
+        payload = {"title": {"title": rich_text(title)}}
+        parent = {"page_id": parent_id}
+
+    body: dict = {"parent": parent, "properties": payload}
+    if blocks:
+        body["children"] = blocks[:MAX_CHILDREN_ON_CREATE]
+
+    created = _get_client().request("POST", "/pages", json=body)
+    if "error" in created:
+        return created
+
+    overflow = blocks[MAX_CHILDREN_ON_CREATE:]
+    if overflow:
+        # POST /pages caps children at 100; the rest is a normal append.
+        appended = _get_client().append_blocks(created["id"], overflow)
+        if "error" in appended:
+            return {**fmt.page(created), "error": f"Page created, but part of the body failed: {appended['error']}"}
+    return fmt.page(created)
+
+
+@mcp.tool()
+def append_to_page(ref: str, markdown: str) -> dict:
+    """
+    Append markdown to the end of a page, as {appended, url}. Existing content is
+    never modified or removed.
+    ref: an alias, a notion.so URL, an id, or an exact page title.
+    markdown: same supported subset as create_page.
+    """
+    try:
+        page_id = _get_resolver().page(ref)
+        blocks = markdown_to_blocks(markdown)
+    except (ResolutionError, MarkdownError, RuntimeError) as e:
+        return _fail(e)
+
+    if not blocks:
+        return {"error": "Nothing to append: the markdown is empty."}
+
+    result = _get_client().append_blocks(page_id, blocks)
+    if "error" in result:
+        return result
+    return {"appended": result["appended"], "url": _page_url(page_id)}
+
+
+@mcp.tool()
+def update_row(ref: str, properties: dict) -> dict:
+    """
+    Set properties on a database row, as {title, url, properties}. Only the named
+    properties change; the page body is untouched.
+    ref: an alias, a notion.so URL, an id, or an exact row title.
+    properties: property name -> value. Call get_database_schema first for the
+      valid names and, for select and status properties, the valid options.
+    """
+    if not properties:
+        return {"error": "No properties given. Pass property name -> value."}
+    try:
+        page_id = _get_resolver().page(ref)
+    except (ResolutionError, RuntimeError) as e:
+        return _fail(e)
+
+    node = _get_client().request("GET", f"/pages/{page_id}")
+    if "error" in node:
+        return node
+
+    parent = node.get("parent") or {}
+    database_id = parent.get("database_id")
+    if not database_id:
+        return {"error": "That page is not a database row, so it has no properties to set. Use append_to_page instead."}
+
+    schema_node = _schema_of(database_id)
+    if "error" in schema_node:
+        return schema_node
+
+    try:
+        payload = write_properties(properties, fmt.schema(schema_node))
+    except PropertyError as e:
+        return _fail(e)
+
+    updated = _get_client().request("PATCH", f"/pages/{page_id}", json={"properties": payload})
+    if "error" in updated:
+        return updated
+    return fmt.page(updated)
+
+
 def main() -> None:
     mcp.run()
 

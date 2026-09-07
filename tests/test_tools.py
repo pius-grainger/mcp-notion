@@ -201,3 +201,99 @@ def test_search_rejects_an_unknown_kind():
 def test_search_caps_results_at_the_documented_limit():
     respx.post(f"{NOTION_API_URL}/search").mock(return_value=listing([PAGE_NODE] * 30))
     assert len(server.search("spec")) == server.DEFAULT_LIMIT
+
+
+@respx.mock
+def test_create_page_in_a_database_sets_the_title_property():
+    import json
+
+    respx.get(f"{NOTION_API_URL}/databases/{DB_DASHED}").mock(return_value=httpx.Response(200, json=DB_NODE))
+    route = respx.post(f"{NOTION_API_URL}/pages").mock(return_value=httpx.Response(200, json=PAGE_NODE))
+    result = server.create_page(DB_URL, "Spec", markdown="hello", properties={"Done": True})
+    body = json.loads(route.calls.last.request.content)
+    assert body["parent"] == {"database_id": DB_DASHED}
+    assert body["properties"]["Name"]["title"][0]["text"]["content"] == "Spec"
+    assert body["properties"]["Done"] == {"checkbox": True}
+    assert body["children"][0]["type"] == "paragraph"
+    assert result["url"] == PAGE_URL
+
+
+@respx.mock
+def test_create_page_under_a_page_uses_the_literal_title_key():
+    import json
+
+    respx.get(f"{NOTION_API_URL}/databases/{DASHED}").mock(
+        return_value=httpx.Response(404, json={"object": "error", "message": "not a database"})
+    )
+    route = respx.post(f"{NOTION_API_URL}/pages").mock(return_value=httpx.Response(200, json=PAGE_NODE))
+    server.create_page(PAGE_URL, "Child")
+    body = json.loads(route.calls.last.request.content)
+    assert body["parent"] == {"page_id": DASHED}
+    assert body["properties"]["title"]["title"][0]["text"]["content"] == "Child"
+
+
+@respx.mock
+def test_create_page_appends_children_beyond_the_first_hundred():
+    respx.get(f"{NOTION_API_URL}/databases/{DB_DASHED}").mock(return_value=httpx.Response(200, json=DB_NODE))
+    respx.post(f"{NOTION_API_URL}/pages").mock(return_value=httpx.Response(200, json=PAGE_NODE))
+    append = respx.patch(f"{NOTION_API_URL}/blocks/{DASHED}/children").mock(
+        return_value=httpx.Response(200, json={"results": []})
+    )
+    server.create_page(DB_URL, "Spec", markdown="\n\n".join(f"line {n}" for n in range(120)))
+    assert append.call_count == 1
+
+
+@respx.mock
+def test_create_page_rejects_unsupported_markdown_before_any_write():
+    respx.get(f"{NOTION_API_URL}/databases/{DB_DASHED}").mock(return_value=httpx.Response(200, json=DB_NODE))
+    route = respx.post(f"{NOTION_API_URL}/pages")
+    result = server.create_page(DB_URL, "Spec", markdown="| a | b |")
+    assert "table" in result["error"].lower()
+    assert route.call_count == 0
+
+
+@respx.mock
+def test_append_to_page_reports_the_block_count_and_url():
+    route = respx.patch(f"{NOTION_API_URL}/blocks/{DASHED}/children").mock(
+        return_value=httpx.Response(200, json={"results": []})
+    )
+    assert server.append_to_page(PAGE_URL, "# Update\n\nbody") == {
+        "appended": 2,
+        "url": f"https://www.notion.so/{RAW}",
+    }
+    assert route.call_count == 1
+
+
+@respx.mock
+def test_append_to_page_rejects_empty_markdown_without_calling_notion():
+    route = respx.patch(f"{NOTION_API_URL}/blocks/{DASHED}/children")
+    assert "error" in server.append_to_page(PAGE_URL, "   ")
+    assert route.call_count == 0
+
+
+@respx.mock
+def test_update_row_writes_translated_properties():
+    import json
+
+    respx.get(f"{NOTION_API_URL}/pages/{DASHED}").mock(return_value=httpx.Response(200, json=PAGE_NODE))
+    respx.get(f"{NOTION_API_URL}/databases/{DB_DASHED}").mock(return_value=httpx.Response(200, json=DB_NODE))
+    route = respx.patch(f"{NOTION_API_URL}/pages/{DASHED}").mock(return_value=httpx.Response(200, json=PAGE_NODE))
+    result = server.update_row(PAGE_URL, {"Done": True, "Stage": "Todo"})
+    body = json.loads(route.calls.last.request.content)
+    assert body["properties"] == {"Done": {"checkbox": True}, "Stage": {"select": {"name": "Todo"}}}
+    assert result["title"] == "Spec"
+
+
+@respx.mock
+def test_update_row_rejects_a_page_that_is_not_a_database_row():
+    node = {**PAGE_NODE, "parent": {"type": "workspace", "workspace": True}}
+    respx.get(f"{NOTION_API_URL}/pages/{DASHED}").mock(return_value=httpx.Response(200, json=node))
+    assert "database" in server.update_row(PAGE_URL, {"Done": True})["error"].lower()
+
+
+@respx.mock
+def test_update_row_reports_an_unknown_property_with_valid_names():
+    respx.get(f"{NOTION_API_URL}/pages/{DASHED}").mock(return_value=httpx.Response(200, json=PAGE_NODE))
+    respx.get(f"{NOTION_API_URL}/databases/{DB_DASHED}").mock(return_value=httpx.Response(200, json=DB_NODE))
+    error = server.update_row(PAGE_URL, {"Dnoe": True})["error"]
+    assert "Dnoe" in error and "Done" in error
