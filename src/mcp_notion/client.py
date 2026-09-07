@@ -42,14 +42,17 @@ class NotionClient:
                     return response
 
         if response.status_code >= 400:
-            return {"error": _error_message(response)}
+            return {"error": _error_message(response), "status": response.status_code}
 
         try:
             body = response.json()
         except ValueError:
-            return {"error": f"Notion returned a non-JSON response: {response.text[:200]}"}
+            return {"error": f"Notion returned a non-JSON response: {response.text[:200]}", "status": response.status_code}
         if not isinstance(body, dict):
-            return {"error": f"Notion returned an unexpected response shape: {body!r:.200}"}
+            return {
+                "error": f"Notion returned an unexpected response shape: {body!r:.200}",
+                "status": response.status_code,
+            }
         return body
 
     def paginate(self, method: str, path: str, json: dict | None = None) -> dict:
@@ -106,6 +109,9 @@ class NotionClient:
         try:
             return self._client.request(method, path, json=json, params=params)
         except httpx.RequestError as e:
+            # No HTTP response was ever received, so there is no status code to
+            # report. The "status" key is omitted entirely here (never set to
+            # None) so callers can use a plain `.get("status") == 404` check.
             return {"error": f"Notion request failed: {e}"}
 
 

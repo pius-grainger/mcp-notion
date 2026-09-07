@@ -239,3 +239,36 @@ def test_any_falls_back_to_page_when_the_id_is_not_a_database(resolver):
         return_value=httpx.Response(404, json={"object": "error", "message": "not a database"})
     )
     assert resolver.any(f"https://notion.so/{RAW}") == ("page", DASHED)
+
+
+@respx.mock
+def test_any_raises_on_a_client_error_instead_of_misreporting_a_page(resolver):
+    """A 401 (or any non-404 error) must not be silently reclassified as "page" -
+    that would send create_page a wrong-shaped parent payload for what may well
+    be a database."""
+    respx.get(f"{NOTION_API_URL}/databases/{DASHED}").mock(
+        return_value=httpx.Response(401, json={"object": "error", "message": "bad token"})
+    )
+    with pytest.raises(ResolutionError):
+        resolver.any(f"https://notion.so/{RAW}")
+
+
+def test_any_raises_on_a_transport_failure_instead_of_misreporting_a_page(resolver):
+    with respx.mock:
+        respx.get(f"{NOTION_API_URL}/databases/{DASHED}").mock(side_effect=httpx.ConnectError("boom"))
+        with pytest.raises(ResolutionError):
+            resolver.any(f"https://notion.so/{RAW}")
+
+
+@respx.mock
+def test_a_failed_resolution_is_not_cached(resolver):
+    """A ref that fails to resolve must be retried, not stuck failing forever -
+    the cache stores only successful resolutions."""
+    route = respx.post(f"{NOTION_API_URL}/search").mock(return_value=search_response([]))
+    with pytest.raises(ResolutionError):
+        resolver.page("Spec")
+
+    # The page is now shared with the integration and shows up in search.
+    route.mock(return_value=search_response([page_node("Spec", RAW, "https://notion.so/a")]))
+    assert resolver.page("Spec") == DASHED
+    assert route.call_count == 2

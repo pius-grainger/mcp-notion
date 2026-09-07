@@ -42,6 +42,22 @@ def test_request_maps_401_to_an_invalid_token_error(client):
 
 
 @respx.mock
+def test_request_includes_the_http_status_on_an_error(client):
+    respx.get(f"{NOTION_API_URL}/pages/abc").mock(
+        return_value=httpx.Response(
+            401, json={"object": "error", "status": 401, "code": "unauthorized", "message": "API token is invalid."}
+        )
+    )
+    assert client.request("GET", "/pages/abc")["status"] == 401
+
+
+@respx.mock
+def test_request_omits_the_status_key_on_a_transport_failure(client):
+    respx.get(f"{NOTION_API_URL}/pages/abc").mock(side_effect=httpx.ConnectError("boom"))
+    assert "status" not in client.request("GET", "/pages/abc")
+
+
+@respx.mock
 def test_request_maps_404_to_a_sharing_hint(client):
     respx.get(f"{NOTION_API_URL}/pages/abc").mock(
         return_value=httpx.Response(

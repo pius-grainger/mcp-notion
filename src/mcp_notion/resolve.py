@@ -78,7 +78,16 @@ class Resolver:
         resolved = self._direct(ref)
         if resolved:
             body = self._client.request("GET", f"/databases/{resolved}")
-            return ("database", resolved) if "error" not in body else ("page", resolved)
+            if "error" not in body:
+                return ("database", resolved)
+            if body.get("status") == 404:
+                # A genuinely unshared id also 404s here; that surfaces as a
+                # clear error at the create call, which is fine. But anything
+                # else (bad token, rate limit, network failure) is not "not a
+                # database" — it is a client error, and misreporting it as a
+                # page would send create_page a wrong-shaped parent payload.
+                return ("page", resolved)
+            raise ResolutionError(body["error"])
         try:
             return ("database", self._resolve(ref, "database"))
         except ResolutionError:
