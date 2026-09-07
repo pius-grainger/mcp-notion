@@ -9,7 +9,7 @@ import os
 import re
 
 _ALIAS_PREFIX = "NOTION_ALIAS_"
-_UUID = re.compile(r"([0-9a-fA-F]{8})-?([0-9a-fA-F]{4})-?([0-9a-fA-F]{4})-?([0-9a-fA-F]{4})-?([0-9a-fA-F]{12})")
+_UUID = re.compile(r"(?<![0-9a-fA-F])([0-9a-fA-F]{8})-?([0-9a-fA-F]{4})-?([0-9a-fA-F]{4})-?([0-9a-fA-F]{4})-?([0-9a-fA-F]{12})(?![0-9a-fA-F])")
 
 
 class ResolutionError(Exception):

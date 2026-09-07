@@ -53,3 +53,51 @@ def test_resolution_error_carries_candidates():
 
 def test_resolution_error_defaults_to_no_candidates():
     assert ResolutionError("nope").candidates == []
+
+
+def test_extract_id_accepts_31_char_hex_as_title():
+    """31-char hex run should not match and return None."""
+    hex31 = "1" * 31
+    assert extract_id(f"Notes about {hex31}") is None
+
+
+def test_extract_id_accepts_32_char_hex_as_uuid():
+    """32-char hex run should match and return dashed UUID."""
+    hex32 = "1" * 32
+    assert extract_id(f"Notes about {hex32}") == "11111111-1111-1111-1111-111111111111"
+
+
+def test_extract_id_rejects_33_char_hex_run():
+    """33+ char hex run should not match and return None (not truncated)."""
+    hex33 = "1" * 33
+    assert extract_id(f"XXX {hex33} XXX") is None
+
+
+def test_extract_id_rejects_40_char_hex_run():
+    """40-char hex run (like a git SHA prefix) should not match and return None."""
+    hex40 = "a" * 40
+    assert extract_id(f"Notes about {hex40}") is None
+
+
+def test_extract_id_takes_the_last_id_when_multiple_in_path():
+    """When multiple ids appear in a path, the last one (page id) wins."""
+    workspace_id = "12345678abcdef0012345678abcdef00"
+    page_id = RAW
+    dashed_workspace = "12345678-abcd-ef00-1234-5678abcdef00"
+    url = f"https://www.notion.so/{workspace_id}/Page-{page_id}"
+    assert extract_id(url) == DASHED  # Should return page_id (last), not workspace_id
+
+
+def test_extract_id_returns_none_for_hex_like_but_not_32_char_title():
+    """A title with hex characters but not exactly 32 chars should return None."""
+    assert extract_id("Deadbeef Notes") is None
+    assert extract_id("abc123def") is None
+
+
+def test_aliases_skips_empty_alias_values(monkeypatch):
+    """Empty-valued NOTION_ALIAS_* variables should not appear in the result."""
+    monkeypatch.setenv("NOTION_ALIAS_EMPTY", "")
+    monkeypatch.setenv("NOTION_ALIAS_FILLED", RAW)
+    result = aliases()
+    assert "empty" not in result
+    assert result["filled"] == RAW
