@@ -234,13 +234,19 @@ def test_create_page_under_a_page_uses_the_literal_title_key():
 
 @respx.mock
 def test_create_page_appends_children_beyond_the_first_hundred():
+    import json
+
     respx.get(f"{NOTION_API_URL}/databases/{DB_DASHED}").mock(return_value=httpx.Response(200, json=DB_NODE))
-    respx.post(f"{NOTION_API_URL}/pages").mock(return_value=httpx.Response(200, json=PAGE_NODE))
+    create = respx.post(f"{NOTION_API_URL}/pages").mock(return_value=httpx.Response(200, json=PAGE_NODE))
     append = respx.patch(f"{NOTION_API_URL}/blocks/{DASHED}/children").mock(
         return_value=httpx.Response(200, json={"results": []})
     )
     server.create_page(DB_URL, "Spec", markdown="\n\n".join(f"line {n}" for n in range(120)))
     assert append.call_count == 1
+    created_body = json.loads(create.calls.last.request.content)
+    appended_body = json.loads(append.calls.last.request.content)
+    assert len(created_body["children"]) == 100
+    assert len(appended_body["children"]) == 20
 
 
 @respx.mock
@@ -249,6 +255,15 @@ def test_create_page_rejects_unsupported_markdown_before_any_write():
     route = respx.post(f"{NOTION_API_URL}/pages")
     result = server.create_page(DB_URL, "Spec", markdown="| a | b |")
     assert "table" in result["error"].lower()
+    assert route.call_count == 0
+
+
+@respx.mock
+def test_create_page_rejects_a_title_passed_through_properties():
+    respx.get(f"{NOTION_API_URL}/databases/{DB_DASHED}").mock(return_value=httpx.Response(200, json=DB_NODE))
+    route = respx.post(f"{NOTION_API_URL}/pages")
+    result = server.create_page(DB_URL, "Spec", properties={"Name": "Sneaky Title"})
+    assert "error" in result
     assert route.call_count == 0
 
 

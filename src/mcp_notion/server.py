@@ -206,14 +206,16 @@ def create_page(
     parent_ref: str, title: str, markdown: str | None = None, properties: dict | None = None
 ) -> dict:
     """
-    Create a page, either as a row in a database or as a subpage of another page.
+    Create a page, either as a row in a database or as a subpage of another page,
+    as {title, url, properties}.
     parent_ref: an alias, a notion.so URL, an id, or an exact title.
-    title: the new page's title.
+    title: the new page's title. For a database parent, set the title this way,
+      not through properties.
     markdown: optional page body. Headings 1-3, paragraphs, bulleted and
       numbered lists, to-dos, fenced code, quotes, and dividers are supported;
       anything else fails the call before Notion is touched.
-    properties: for a database parent only, property name -> value. Call
-      get_database_schema first for the valid names.
+    properties: for a database parent only, property name -> value, excluding
+      the title property. Call get_database_schema first for the valid names.
     """
     try:
         kind, parent_id = _get_resolver().any(parent_ref)
@@ -229,6 +231,13 @@ def create_page(
         title_name = next((name for name, prop in schema.items() if prop["type"] == "title"), None)
         if title_name is None:
             return {"error": "That database has no title property, so a page cannot be created in it."}
+        if properties and title_name in properties:
+            return {
+                "error": (
+                    f"'{title_name}' is this database's title property. Set it with the "
+                    "title parameter, not properties."
+                )
+            }
         try:
             payload = write_properties(properties or {}, schema)
         except PropertyError as e:
@@ -265,7 +274,8 @@ def append_to_page(ref: str, markdown: str) -> dict:
     Append markdown to the end of a page, as {appended, url}. Existing content is
     never modified or removed.
     ref: an alias, a notion.so URL, an id, or an exact page title.
-    markdown: same supported subset as create_page.
+    markdown: same supported subset as create_page. Empty or whitespace-only
+      markdown is rejected without contacting Notion.
     """
     try:
         page_id = _get_resolver().page(ref)
