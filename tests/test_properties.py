@@ -111,3 +111,116 @@ def test_title_of_finds_the_title_property_under_any_name():
 
 def test_title_of_returns_empty_string_when_absent():
     assert title_of({"Done": {"type": "checkbox", "checkbox": False}}) == ""
+
+
+import pytest
+
+from mcp_notion.properties import PropertyError, build_filter, build_sorts, write_properties, write_value
+
+SCHEMA = {
+    "Name": {"type": "title"},
+    "Notes": {"type": "rich_text"},
+    "Points": {"type": "number"},
+    "Stage": {"type": "select"},
+    "State": {"type": "status"},
+    "Tags": {"type": "multi_select"},
+    "Done": {"type": "checkbox"},
+    "Due": {"type": "date"},
+    "Link": {"type": "url"},
+    "Owner": {"type": "people"},
+}
+
+
+def test_write_value_builds_a_title_payload():
+    assert write_value("Spec", "title", "Name") == {"title": [{"type": "text", "text": {"content": "Spec"}}]}
+
+
+def test_write_value_builds_select_and_status_payloads():
+    assert write_value("Done", "select", "Stage") == {"select": {"name": "Done"}}
+    assert write_value("Todo", "status", "State") == {"status": {"name": "Todo"}}
+
+
+def test_write_value_accepts_a_string_or_a_list_for_multi_select():
+    assert write_value(["a", "b"], "multi_select", "Tags") == {"multi_select": [{"name": "a"}, {"name": "b"}]}
+    assert write_value("a", "multi_select", "Tags") == {"multi_select": [{"name": "a"}]}
+
+
+def test_write_value_builds_date_number_checkbox_and_url_payloads():
+    assert write_value("2026-09-07", "date", "Due") == {"date": {"start": "2026-09-07"}}
+    assert write_value({"start": "2026-09-07", "end": "2026-09-09"}, "date", "Due") == {
+        "date": {"start": "2026-09-07", "end": "2026-09-09"}
+    }
+    assert write_value(3, "number", "Points") == {"number": 3}
+    assert write_value(True, "checkbox", "Done") == {"checkbox": True}
+    assert write_value("https://x.y", "url", "Link") == {"url": "https://x.y"}
+
+
+def test_write_value_clears_a_property_when_given_none():
+    assert write_value(None, "select", "Stage") == {"select": None}
+    assert write_value(None, "rich_text", "Notes") == {"rich_text": []}
+
+
+def test_write_value_rejects_a_non_writable_type_by_name():
+    with pytest.raises(PropertyError) as caught:
+        write_value("Ada", "people", "Owner")
+    assert "Owner" in caught.value.message and "people" in caught.value.message
+
+
+def test_write_properties_builds_a_payload_for_every_named_property():
+    assert write_properties({"Name": "Spec", "Done": True}, SCHEMA) == {
+        "Name": {"title": [{"type": "text", "text": {"content": "Spec"}}]},
+        "Done": {"checkbox": True},
+    }
+
+
+def test_write_properties_rejects_an_unknown_name_and_lists_valid_ones():
+    with pytest.raises(PropertyError) as caught:
+        write_properties({"Nmae": "typo"}, SCHEMA)
+    assert "Nmae" in caught.value.message
+    assert "Name" in caught.value.message
+
+
+def test_build_filter_returns_none_for_no_filters():
+    assert build_filter(None, SCHEMA) is None
+    assert build_filter({}, SCHEMA) is None
+
+
+def test_build_filter_emits_a_bare_clause_for_one_property():
+    assert build_filter({"Stage": "Done"}, SCHEMA) == {"property": "Stage", "select": {"equals": "Done"}}
+
+
+def test_build_filter_ands_multiple_clauses():
+    result = build_filter({"Stage": "Done", "Done": True}, SCHEMA)
+    assert result == {
+        "and": [
+            {"property": "Stage", "select": {"equals": "Done"}},
+            {"property": "Done", "checkbox": {"equals": True}},
+        ]
+    }
+
+
+def test_build_filter_uses_contains_for_multi_select_and_rich_text():
+    assert build_filter({"Tags": "urgent"}, SCHEMA) == {"property": "Tags", "multi_select": {"contains": "urgent"}}
+    assert build_filter({"Notes": "abc"}, SCHEMA) == {"property": "Notes", "rich_text": {"contains": "abc"}}
+
+
+def test_build_filter_rejects_an_unknown_property():
+    with pytest.raises(PropertyError) as caught:
+        build_filter({"Missing": 1}, SCHEMA)
+    assert "Missing" in caught.value.message
+
+
+def test_build_sorts_maps_a_property_and_direction():
+    assert build_sorts({"property": "Points", "direction": "desc"}, SCHEMA) == [
+        {"property": "Points", "direction": "descending"}
+    ]
+
+
+def test_build_sorts_defaults_to_ascending_and_tolerates_none():
+    assert build_sorts({"property": "Points"}, SCHEMA) == [{"property": "Points", "direction": "ascending"}]
+    assert build_sorts(None, SCHEMA) == []
+
+
+def test_build_sorts_rejects_an_unknown_property():
+    with pytest.raises(PropertyError):
+        build_sorts({"property": "Missing"}, SCHEMA)
