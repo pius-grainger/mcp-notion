@@ -64,3 +64,42 @@ def test_formatters_tolerate_missing_keys():
     assert fmt.page({}) == {"title": "", "url": None, "properties": {}, "created_time": None, "last_edited_time": None}
     assert fmt.database({}) == {"title": "", "url": None}
     assert fmt.schema({}) == {}
+    assert fmt.entity_title({}) == ""
+
+
+def test_schema_includes_multi_select_options():
+    db = {
+        "properties": {
+            "Tags": {
+                "type": "multi_select",
+                "multi_select": {"options": [{"name": "Important"}, {"name": "Urgent"}]},
+            }
+        }
+    }
+    assert fmt.schema(db)["Tags"] == {"type": "multi_select", "options": ["Important", "Urgent"]}
+
+
+def test_schema_includes_status_options():
+    db = {
+        "properties": {
+            "Status": {
+                "type": "status",
+                "status": {"options": [{"name": "Not Started"}, {"name": "In Progress"}, {"name": "Complete"}]},
+            }
+        }
+    }
+    assert fmt.schema(db)["Status"] == {"type": "status", "options": ["Not Started", "In Progress", "Complete"]}
+
+
+def test_schema_handles_missing_or_none_options():
+    db = {
+        "properties": {
+            "SelectNoOptions": {"type": "select"},
+            "SelectNoneOptions": {"type": "select", "select": None},
+            "StatusEmpty": {"type": "status", "status": {}},
+        }
+    }
+    schema = fmt.schema(db)
+    assert schema["SelectNoOptions"] == {"type": "select", "options": []}
+    assert schema["SelectNoneOptions"] == {"type": "select", "options": []}
+    assert schema["StatusEmpty"] == {"type": "status", "options": []}
