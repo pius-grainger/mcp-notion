@@ -160,6 +160,11 @@ def test_write_value_clears_a_property_when_given_none():
     assert write_value(None, "rich_text", "Notes") == {"rich_text": []}
 
 
+def test_write_value_clears_multi_select_when_given_none_or_empty_list():
+    assert write_value(None, "multi_select", "Tags") == {"multi_select": []}
+    assert write_value([], "multi_select", "Tags") == {"multi_select": []}
+
+
 def test_write_value_rejects_a_non_writable_type_by_name():
     with pytest.raises(PropertyError) as caught:
         write_value("Ada", "people", "Owner")
@@ -178,6 +183,15 @@ def test_write_properties_rejects_an_unknown_name_and_lists_valid_ones():
         write_properties({"Nmae": "typo"}, SCHEMA)
     assert "Nmae" in caught.value.message
     assert "Name" in caught.value.message
+
+
+def test_write_properties_rejects_a_non_writable_type_looked_up_from_the_schema():
+    # Exercises the public entry point (schema dispatch), not write_value directly:
+    # this is what Tasks 10/11 actually call, and it must reject rather than
+    # emit a payload Notion would bounce with an opaque 400.
+    with pytest.raises(PropertyError) as caught:
+        write_properties({"Owner": "Ada"}, SCHEMA)
+    assert "Owner" in caught.value.message and "people" in caught.value.message
 
 
 def test_build_filter_returns_none_for_no_filters():
@@ -208,6 +222,13 @@ def test_build_filter_rejects_an_unknown_property():
     with pytest.raises(PropertyError) as caught:
         build_filter({"Missing": 1}, SCHEMA)
     assert "Missing" in caught.value.message
+
+
+def test_build_filter_rejects_a_non_writable_type_looked_up_from_the_schema():
+    # Same entry-point concern as write_properties: no-one should be able to
+    # build a "people" filter clause Notion would reject.
+    with pytest.raises(PropertyError):
+        build_filter({"Owner": "Ada"}, SCHEMA)
 
 
 def test_build_sorts_maps_a_property_and_direction():

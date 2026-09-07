@@ -123,9 +123,7 @@ def write_value(value, kind: str, name: str) -> dict:
 def write_properties(values: dict, schema: dict) -> dict:
     payload = {}
     for name, value in (values or {}).items():
-        prop = (schema or {}).get(name)
-        if prop is None:
-            raise PropertyError(f"'{name}' is not a property of this database. Valid names: {_names(schema)}.")
+        prop = _require_property(name, schema)
         payload[name] = write_value(value, prop.get("type") or "", name)
     return payload
 
@@ -134,9 +132,7 @@ def build_filter(filters: dict | None, schema: dict) -> dict | None:
     """Property name -> value, AND-combined. Notion's raw filter syntax stays internal."""
     clauses = []
     for name, value in (filters or {}).items():
-        prop = (schema or {}).get(name)
-        if prop is None:
-            raise PropertyError(f"'{name}' is not a property of this database. Valid names: {_names(schema)}.")
+        prop = _require_property(name, schema)
         kind = prop.get("type") or ""
         operator = _FILTER_OPERATOR.get(kind)
         if operator is None:
@@ -155,10 +151,17 @@ def build_sorts(sort: dict | None, schema: dict) -> list[dict]:
     if not sort:
         return []
     name = sort.get("property")
-    if name not in (schema or {}):
-        raise PropertyError(f"'{name}' is not a property of this database. Valid names: {_names(schema)}.")
+    _require_property(name, schema)
     direction = "descending" if str(sort.get("direction", "asc")).lower().startswith("desc") else "ascending"
     return [{"property": name, "direction": direction}]
+
+
+def _require_property(name: str, schema: dict) -> dict:
+    """Look up `name` in `schema`, raising PropertyError with the valid names if absent."""
+    prop = (schema or {}).get(name)
+    if prop is None:
+        raise PropertyError(f"'{name}' is not a property of this database. Valid names: {_names(schema)}.")
+    return prop
 
 
 def _names(schema: dict) -> str:
