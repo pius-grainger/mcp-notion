@@ -1,3 +1,5 @@
+import functools
+import inspect
 import os
 
 from dotenv import load_dotenv
@@ -47,6 +49,9 @@ def _get_resolver() -> Resolver:
     return _resolver
 
 
+_EXPECTED = (ResolutionError, MarkdownError, PropertyError, RuntimeError)
+
+
 def _fail(exc: Exception) -> dict:
     """Any expected failure as a plain error dict. Candidates ride along when present."""
     if isinstance(exc, MarkdownError):
@@ -54,6 +59,37 @@ def _fail(exc: Exception) -> dict:
     message = getattr(exc, "message", None) or str(exc)
     candidates = getattr(exc, "candidates", None)
     return {"error": message, "candidates": candidates} if candidates else {"error": message}
+
+
+def _unexpected(tool: str, exc: Exception) -> dict:
+    """A failure nobody anticipated, named well enough to be reportable."""
+    return {"error": f"{tool} failed unexpectedly: {type(exc).__name__}: {exc}"}
+
+
+def tool_boundary(func):
+    """Guarantee a tool returns an error value rather than raising.
+
+    The invariant that no exception crosses the MCP boundary cannot rest on
+    each tool enumerating the exception types it expects: the first unforeseen
+    one — an unexpected shape in a Notion response, say — escapes as a raised
+    exception. This is the backstop, and it is now the only place the invariant
+    is enforced; the tools no longer each repeat it.
+
+    functools.wraps keeps __name__, __doc__ and __wrapped__, so FastMCP still
+    derives the tool's name, schema, and description from the original function.
+    """
+    annotation = inspect.signature(func).return_annotation
+    returns_list = getattr(annotation, "__origin__", annotation) is list
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except Exception as exc:
+            error = _fail(exc) if isinstance(exc, _EXPECTED) else _unexpected(func.__name__, exc)
+            return [error] if returns_list else error
+
+    return wrapper
 
 
 def _page_url(page_id: str) -> str:
@@ -67,6 +103,7 @@ def _schema_of(database_id: str) -> dict:
 
 
 @mcp.tool()
+@tool_boundary
 def list_databases() -> list[dict]:
     """
     List Notion databases visible to this integration, as {title, url, alias}.
@@ -74,10 +111,7 @@ def list_databases() -> list[dict]:
     match no visible database are listed with a null title — they are still
     usable as a `ref`, but the integration may not have access yet.
     """
-    try:
-        nodes = _get_resolver().search("", "database")
-    except (ResolutionError, RuntimeError) as e:
-        return [_fail(e)]
+    nodes = _get_resolver().search("", "database")
 
     configured = {name: extract_id(value) for name, value in aliases().items()}
     by_id = {}
@@ -101,17 +135,14 @@ def list_databases() -> list[dict]:
 
 
 @mcp.tool()
+@tool_boundary
 def get_database_schema(ref: str) -> dict:
     """
     Property names and types for a database, as {title, url, properties}.
     Call this before filtering with query_database or writing with update_row.
     ref: an alias, a notion.so URL, an id, or an exact database title.
     """
-    try:
-        database_id = _get_resolver().database(ref)
-    except (ResolutionError, RuntimeError) as e:
-        return _fail(e)
-
+    database_id = _get_resolver().database(ref)
     node = _schema_of(database_id)
     if "error" in node:
         return node
@@ -119,6 +150,7 @@ def get_database_schema(ref: str) -> dict:
 
 
 @mcp.tool()
+@tool_boundary
 def query_database(
     ref: str, filter: dict | None = None, sort: dict | None = None, limit: int = DEFAULT_LIMIT
 ) -> list[dict]:
@@ -131,34 +163,33 @@ def query_database(
     sort: {"property": name, "direction": "asc" | "desc"}.
     limit: maximum rows to return.
     """
-    try:
-        database_id = _get_resolver().database(ref)
-    except (ResolutionError, RuntimeError) as e:
-        return [_fail(e)]
-
+    database_id = _get_resolver().database(ref)
     node = _schema_of(database_id)
     if "error" in node:
         return [node]
 
     schema = fmt.schema(node)
-    try:
-        payload: dict = {}
-        clause = build_filter(filter, schema)
-        if clause:
-            payload["filter"] = clause
-        sorts = build_sorts(sort, schema)
-        if sorts:
-            payload["sorts"] = sorts
-    except PropertyError as e:
-        return [_fail(e)]
+    payload: dict = {}
+    clause = build_filter(filter, schema)
+    if clause:
+        payload["filter"] = clause
+    sorts = build_sorts(sort, schema)
+    if sorts:
+        payload["sorts"] = sorts
 
-    body = _get_client().paginate("POST", f"/databases/{database_id}/query", payload)
+    # The limit bounds the fetch, not just the answer: paginating a large
+    # database to exhaustion only to discard all but `limit` rows is a pile of
+    # round trips and a real chance of hitting the rate limit.
+    body = _get_client().paginate(
+        "POST", f"/databases/{database_id}/query", payload, max_items=max(limit, 0)
+    )
     if "error" in body:
         return [body]
-    return [fmt.page(row) for row in body["results"][: max(limit, 0)]]
+    return [fmt.page(row) for row in body["results"]]
 
 
 @mcp.tool()
+@tool_boundary
 def get_page(ref: str) -> dict:
     """
     A Notion page, as {title, url, properties, markdown}. The body is markdown;
@@ -166,11 +197,7 @@ def get_page(ref: str) -> dict:
     `<!-- unsupported: TYPE -->`.
     ref: an alias, a notion.so URL, an id, or an exact page title.
     """
-    try:
-        page_id = _get_resolver().page(ref)
-    except (ResolutionError, RuntimeError) as e:
-        return _fail(e)
-
+    page_id = _get_resolver().page(ref)
     node = _get_client().request("GET", f"/pages/{page_id}")
     if "error" in node:
         return node
@@ -182,6 +209,7 @@ def get_page(ref: str) -> dict:
 
 
 @mcp.tool()
+@tool_boundary
 def search(query: str, kind: str | None = None) -> list[dict]:
     """
     Search titles of pages and databases shared with this integration, as
@@ -191,17 +219,15 @@ def search(query: str, kind: str | None = None) -> list[dict]:
     """
     if kind not in (None, "page", "database"):
         return [{"error": f"kind must be 'page', 'database', or omitted, not '{kind}'."}]
-    try:
-        nodes = _get_resolver().search(query, kind)
-    except (ResolutionError, RuntimeError) as e:
-        return [_fail(e)]
+    nodes = _get_resolver().search(query, kind, max_items=DEFAULT_LIMIT)
     return [
         {"title": fmt.entity_title(node), "url": node.get("url"), "kind": node.get("object")}
-        for node in nodes[:DEFAULT_LIMIT]
+        for node in nodes
     ]
 
 
 @mcp.tool()
+@tool_boundary
 def create_page(
     parent_ref: str, title: str, markdown: str | None = None, properties: dict | None = None
 ) -> dict:
@@ -217,11 +243,8 @@ def create_page(
     properties: for a database parent only, property name -> value, excluding
       the title property. Call get_database_schema first for the valid names.
     """
-    try:
-        kind, parent_id = _get_resolver().any(parent_ref)
-        blocks = markdown_to_blocks(markdown) if markdown else []
-    except (ResolutionError, MarkdownError, RuntimeError) as e:
-        return _fail(e)
+    kind, parent_id = _get_resolver().any(parent_ref)
+    blocks = markdown_to_blocks(markdown) if markdown else []
 
     if kind == "database":
         node = _schema_of(parent_id)
@@ -238,10 +261,7 @@ def create_page(
                     "title parameter, not properties."
                 )
             }
-        try:
-            payload = write_properties(properties or {}, schema)
-        except PropertyError as e:
-            return _fail(e)
+        payload = write_properties(properties or {}, schema)
         payload[title_name] = write_value(title, "title", title_name)
         parent = {"database_id": parent_id}
     else:
@@ -269,6 +289,7 @@ def create_page(
 
 
 @mcp.tool()
+@tool_boundary
 def append_to_page(ref: str, markdown: str) -> dict:
     """
     Append markdown to the end of a page, as {appended, url}. Existing content is
@@ -277,22 +298,33 @@ def append_to_page(ref: str, markdown: str) -> dict:
     markdown: same supported subset as create_page. Empty or whitespace-only
       markdown is rejected without contacting Notion.
     """
-    try:
-        page_id = _get_resolver().page(ref)
-        blocks = markdown_to_blocks(markdown)
-    except (ResolutionError, MarkdownError, RuntimeError) as e:
-        return _fail(e)
+    page_id = _get_resolver().page(ref)
+    blocks = markdown_to_blocks(markdown)
 
     if not blocks:
         return {"error": "Nothing to append: the markdown is empty."}
 
     result = _get_client().append_blocks(page_id, blocks)
+    landed = result.get("appended") or 0
     if "error" in result:
-        return result
-    return {"appended": result["appended"], "url": _page_url(page_id)}
+        if not landed:
+            return {**result, "url": _page_url(page_id)}
+        # Those blocks are already in Notion and there is no undo. Reporting a
+        # bare failure invites a retry that silently duplicates them.
+        return {
+            "appended": landed,
+            "url": _page_url(page_id),
+            "error": (
+                f"Partly appended: {landed} of {len(blocks)} blocks were written to the page "
+                f"before the call failed. Do not resend the same markdown — it would duplicate "
+                f"those {landed} blocks. Resend only what follows them. Notion said: {result['error']}"
+            ),
+        }
+    return {"appended": landed, "url": _page_url(page_id)}
 
 
 @mcp.tool()
+@tool_boundary
 def update_row(ref: str, properties: dict) -> dict:
     """
     Set properties on a database row, as {title, url, properties}. Only the named
@@ -303,11 +335,7 @@ def update_row(ref: str, properties: dict) -> dict:
     """
     if not properties:
         return {"error": "No properties given. Pass property name -> value."}
-    try:
-        page_id = _get_resolver().page(ref)
-    except (ResolutionError, RuntimeError) as e:
-        return _fail(e)
-
+    page_id = _get_resolver().page(ref)
     node = _get_client().request("GET", f"/pages/{page_id}")
     if "error" in node:
         return node
@@ -321,11 +349,7 @@ def update_row(ref: str, properties: dict) -> dict:
     if "error" in schema_node:
         return schema_node
 
-    try:
-        payload = write_properties(properties, fmt.schema(schema_node))
-    except PropertyError as e:
-        return _fail(e)
-
+    payload = write_properties(properties, fmt.schema(schema_node))
     updated = _get_client().request("PATCH", f"/pages/{page_id}", json={"properties": payload})
     if "error" in updated:
         return updated

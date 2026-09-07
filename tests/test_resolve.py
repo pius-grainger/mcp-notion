@@ -260,6 +260,79 @@ def test_any_raises_on_a_transport_failure_instead_of_misreporting_a_page(resolv
             resolver.any(f"https://notion.so/{RAW}")
 
 
+def database_node(title, database_id, url):
+    return {
+        "object": "database",
+        "id": database_id,
+        "url": url,
+        "title": [{"plain_text": title, "text": {"content": title}}],
+    }
+
+
+def by_object_filter(database_nodes, page_nodes):
+    """POST /search twice: once filtered to databases, once to pages."""
+
+    def respond(request):
+        kind = (json.loads(request.content).get("filter") or {}).get("value")
+        return search_response(database_nodes if kind == "database" else page_nodes)
+
+    return respond
+
+
+@respx.mock
+def test_any_keeps_the_database_candidates_when_the_page_branch_finds_nothing(resolver):
+    """Two databases share the title, no page has it. Reporting only the page
+    branch's "not visible" message sends the user to the sharing menu for a
+    sharing problem they do not have, and throws away both candidate URLs."""
+    respx.post(f"{NOTION_API_URL}/search").mock(
+        side_effect=by_object_filter(
+            [
+                database_node("Tasks", RAW, "https://notion.so/one"),
+                database_node("Tasks", OTHER, "https://notion.so/two"),
+            ],
+            [],
+        )
+    )
+    with pytest.raises(ResolutionError) as caught:
+        resolver.any("Tasks")
+    assert "matches 2 databases" in caught.value.message
+    assert [c["url"] for c in caught.value.candidates] == ["https://notion.so/one", "https://notion.so/two"]
+
+
+@respx.mock
+def test_any_merges_the_candidates_of_both_branches(resolver):
+    """A database and a page both partially match: the user needs to see both."""
+    respx.post(f"{NOTION_API_URL}/search").mock(
+        side_effect=by_object_filter(
+            [database_node("Tasks Archive", RAW, "https://notion.so/db")],
+            [page_node("Tasks Notes", OTHER, "https://notion.so/page")],
+        )
+    )
+    with pytest.raises(ResolutionError) as caught:
+        resolver.any("Tasks")
+    assert [c["url"] for c in caught.value.candidates] == ["https://notion.so/db", "https://notion.so/page"]
+
+
+@respx.mock
+def test_any_reports_the_page_branch_when_neither_branch_found_anything(resolver):
+    respx.post(f"{NOTION_API_URL}/search").mock(return_value=search_response([]))
+    with pytest.raises(ResolutionError) as caught:
+        resolver.any("Nowhere")
+    assert caught.value.candidates == []
+    assert "Nowhere" in caught.value.message
+
+
+@respx.mock
+def test_any_does_not_mask_a_failed_search_with_a_sharing_hint(resolver):
+    """A bad token must stay a bad token, not become "no page named X"."""
+    respx.post(f"{NOTION_API_URL}/search").mock(
+        return_value=httpx.Response(401, json={"object": "error", "message": "API token is invalid."})
+    )
+    with pytest.raises(ResolutionError) as caught:
+        resolver.any("Tasks")
+    assert "token" in caught.value.message.lower()
+
+
 @respx.mock
 def test_a_failed_resolution_is_not_cached(resolver):
     """A ref that fails to resolve must be retried, not stuck failing forever -

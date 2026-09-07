@@ -168,15 +168,110 @@ def test_append_blocks_chunks_at_one_hundred(client):
 
 @respx.mock
 def test_append_blocks_stops_on_the_first_error(client):
+    """250 blocks is three chunks, and the second fails: the third must not be sent.
+
+    With 150 blocks (two chunks, failing on the last) the assertion could not
+    tell "stopped on the error" from "ran every chunk".
+    """
     route = respx.patch(f"{NOTION_API_URL}/blocks/abc/children").mock(
         side_effect=[
             httpx.Response(200, json={"results": []}),
             httpx.Response(400, json={"object": "error", "message": "bad block"}),
+            httpx.Response(200, json={"results": []}),
         ]
     )
-    blocks = [{"object": "block", "type": "divider", "divider": {}} for _ in range(150)]
+    blocks = [{"object": "block", "type": "divider", "divider": {}} for _ in range(250)]
     assert "error" in client.append_blocks("abc", blocks)
     assert route.call_count == 2
+
+
+@respx.mock
+def test_append_blocks_reports_how_many_blocks_landed_before_an_error(client):
+    """The first chunk is in Notion and cannot be taken back. A caller told only
+    "error" would retry the whole body and duplicate those 100 blocks."""
+    respx.patch(f"{NOTION_API_URL}/blocks/abc/children").mock(
+        side_effect=[
+            httpx.Response(200, json={"results": []}),
+            httpx.Response(429, headers={"Retry-After": "0"}, json={"object": "error", "message": "rate limited"}),
+            httpx.Response(429, headers={"Retry-After": "0"}, json={"object": "error", "message": "rate limited"}),
+        ]
+    )
+    blocks = [{"object": "block", "type": "divider", "divider": {}} for _ in range(250)]
+    result = client.append_blocks("abc", blocks)
+    assert result["appended"] == 100
+    assert "error" in result
+
+
+@respx.mock
+def test_append_blocks_reports_zero_appended_when_the_first_chunk_fails(client):
+    respx.patch(f"{NOTION_API_URL}/blocks/abc/children").mock(
+        return_value=httpx.Response(400, json={"object": "error", "message": "bad block"})
+    )
+    result = client.append_blocks("abc", [{"object": "block", "type": "divider", "divider": {}}])
+    assert result["appended"] == 0
+
+
+@respx.mock
+def test_paginate_stops_following_cursors_once_max_items_is_reached(client):
+    """The whole point of a limit: 3 pages exist, 1 row is wanted, 1 request is made."""
+    route = respx.post(f"{NOTION_API_URL}/databases/db/query").mock(
+        side_effect=[
+            httpx.Response(200, json={"results": [{"id": "1"}], "has_more": True, "next_cursor": "a"}),
+            httpx.Response(200, json={"results": [{"id": "2"}], "has_more": True, "next_cursor": "b"}),
+            httpx.Response(200, json={"results": [{"id": "3"}], "has_more": False, "next_cursor": None}),
+        ]
+    )
+    assert client.paginate("POST", "/databases/db/query", max_items=1) == {"results": [{"id": "1"}]}
+    assert route.call_count == 1
+
+
+@respx.mock
+def test_paginate_asks_for_no_more_rows_than_max_items(client):
+    route = respx.post(f"{NOTION_API_URL}/databases/db/query").mock(
+        return_value=httpx.Response(200, json={"results": [], "has_more": False, "next_cursor": None})
+    )
+    client.paginate("POST", "/databases/db/query", max_items=5)
+    assert json.loads(route.calls.last.request.content)["page_size"] == 5
+
+
+@respx.mock
+def test_paginate_caps_the_requested_page_size_at_the_api_maximum(client):
+    route = respx.post(f"{NOTION_API_URL}/databases/db/query").mock(
+        return_value=httpx.Response(200, json={"results": [], "has_more": False, "next_cursor": None})
+    )
+    client.paginate("POST", "/databases/db/query", max_items=5000)
+    assert json.loads(route.calls.last.request.content)["page_size"] == 100
+
+
+@respx.mock
+def test_paginate_trims_a_page_that_overshoots_max_items(client):
+    respx.post(f"{NOTION_API_URL}/databases/db/query").mock(
+        return_value=httpx.Response(
+            200, json={"results": [{"id": "1"}, {"id": "2"}, {"id": "3"}], "has_more": False, "next_cursor": None}
+        )
+    )
+    assert client.paginate("POST", "/databases/db/query", max_items=2) == {"results": [{"id": "1"}, {"id": "2"}]}
+
+
+@respx.mock
+def test_paginate_makes_no_request_at_all_for_a_zero_max_items(client):
+    route = respx.post(f"{NOTION_API_URL}/databases/db/query")
+    assert client.paginate("POST", "/databases/db/query", max_items=0) == {"results": []}
+    assert route.call_count == 0
+
+
+@respx.mock
+def test_paginate_without_max_items_still_exhausts_every_cursor(client):
+    route = respx.post(f"{NOTION_API_URL}/databases/db/query").mock(
+        side_effect=[
+            httpx.Response(200, json={"results": [{"id": "1"}], "has_more": True, "next_cursor": "a"}),
+            httpx.Response(200, json={"results": [{"id": "2"}], "has_more": True, "next_cursor": "b"}),
+            httpx.Response(200, json={"results": [{"id": "3"}], "has_more": False, "next_cursor": None}),
+        ]
+    )
+    assert len(client.paginate("POST", "/databases/db/query")["results"]) == 3
+    assert route.call_count == 3
+    assert json.loads(route.calls[0].request.content)["page_size"] == 100
 
 
 @respx.mock
@@ -195,6 +290,19 @@ def test_fetch_block_tree_attaches_children(client):
     )
     tree = client.fetch_block_tree("root")
     assert tree[0]["children"][0]["id"] == "grandkid"
+
+
+@respx.mock
+def test_fetch_block_tree_skips_a_child_block_that_has_no_id(client):
+    """A response shape we do not understand must not raise out of the tool."""
+    respx.get(url__regex=rf"{NOTION_API_URL}/blocks/root/children.*").mock(
+        return_value=httpx.Response(
+            200,
+            json={"results": [{"type": "paragraph", "has_children": True}], "has_more": False, "next_cursor": None},
+        )
+    )
+    tree = client.fetch_block_tree("root")
+    assert tree == [{"type": "paragraph", "has_children": True}]
 
 
 @respx.mock

@@ -55,13 +55,22 @@ class NotionClient:
             }
         return body
 
-    def paginate(self, method: str, path: str, json: dict | None = None) -> dict:
-        """Follow `next_cursor` to exhaustion. Returns {"results": [...]} or an error."""
+    def paginate(self, method: str, path: str, json: dict | None = None, max_items: int | None = None) -> dict:
+        """Follow `next_cursor`. Returns {"results": [...]} or an error.
+
+        Without `max_items` every cursor is followed to exhaustion, which is what
+        a block tree or a full database listing needs. With it, the fetch stops
+        as soon as that many results are in hand and sizes the request to match:
+        returning 25 rows from a 2000-row database is one request, not twenty.
+        """
+        if max_items is not None and max_items <= 0:
+            return {"results": []}
         results: list[dict] = []
         cursor: str | None = None
+        page_size = PAGE_SIZE if max_items is None else min(max_items, PAGE_SIZE)
         while True:
             payload = dict(json or {})
-            payload["page_size"] = PAGE_SIZE
+            payload["page_size"] = page_size
             if cursor:
                 payload["start_cursor"] = cursor
             if method.upper() == "GET":
@@ -71,6 +80,8 @@ class NotionClient:
             if "error" in body:
                 return body
             results.extend(body.get("results") or [])
+            if max_items is not None and len(results) >= max_items:
+                return {"results": results[:max_items]}
             if not body.get("has_more"):
                 return {"results": results}
             cursor = body.get("next_cursor")
@@ -89,7 +100,13 @@ class NotionClient:
         for block in blocks:
             if not block.get("has_children"):
                 continue
-            children = self.fetch_block_tree(block["id"], max_depth - 1)
+            child_id = block.get("id")
+            if not child_id:
+                # A block without an id cannot be followed. Notion always sends
+                # one; a missing key is a response shape we do not understand,
+                # and dropping the children beats raising out of the tool.
+                continue
+            children = self.fetch_block_tree(child_id, max_depth - 1)
             if isinstance(children, dict):
                 return children
             if children:
@@ -97,13 +114,21 @@ class NotionClient:
         return blocks
 
     def append_blocks(self, block_id: str, blocks: list[dict]) -> dict:
-        """Append in chunks of 100. Notion rejects more in one request."""
+        """Append in chunks of 100. Notion rejects more in one request.
+
+        A failure part-way through is a partial write: the chunks before it are
+        already in Notion and there is no undo. "appended" is therefore reported
+        on the error path too, so the caller learns how much landed instead of
+        retrying the whole body and duplicating it.
+        """
+        appended = 0
         for start in range(0, len(blocks), MAX_BLOCKS_PER_REQUEST):
             chunk = blocks[start : start + MAX_BLOCKS_PER_REQUEST]
             body = self.request("PATCH", f"/blocks/{block_id}/children", json={"children": chunk})
             if "error" in body:
-                return body
-        return {"appended": len(blocks)}
+                return {**body, "appended": appended}
+            appended += len(chunk)
+        return {"appended": appended}
 
     def _send(self, method: str, path: str, json: dict | None, params: dict | None) -> httpx.Response | dict:
         try:

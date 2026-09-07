@@ -90,15 +90,22 @@ class Resolver:
             raise ResolutionError(body["error"])
         try:
             return ("database", self._resolve(ref, "database"))
-        except ResolutionError:
-            return ("page", self._resolve(ref, "page"))
+        except ResolutionError as database_error:
+            try:
+                return ("page", self._resolve(ref, "page"))
+            except ResolutionError as page_error:
+                raise _both_branches_failed(ref, database_error, page_error) from None
 
-    def search(self, query: str, kind: str | None = None) -> list[dict]:
-        """Raw search nodes. Raises ResolutionError if the request itself fails."""
+    def search(self, query: str, kind: str | None = None, max_items: int | None = None) -> list[dict]:
+        """Raw search nodes. Raises ResolutionError if the request itself fails.
+
+        `max_items` caps the fetch. Title resolution leaves it unset on purpose:
+        it must see every match to tell one from many.
+        """
         payload: dict = {"query": query or ""}
         if kind:
             payload["filter"] = {"property": "object", "value": kind}
-        body = self._client.paginate("POST", "/search", payload)
+        body = self._client.paginate("POST", "/search", payload, max_items=max_items)
         if "error" in body:
             raise ResolutionError(body["error"])
         return body["results"]
@@ -146,3 +153,39 @@ class Resolver:
 
 def _candidates(nodes: list[dict]) -> list[dict]:
     return [{"title": fmt.entity_title(node), "url": node.get("url")} for node in nodes[:MAX_CANDIDATES]]
+
+
+def _both_branches_failed(
+    ref: str, database_error: ResolutionError, page_error: ResolutionError
+) -> ResolutionError:
+    """Pick the error Resolver.any should raise when neither branch resolved.
+
+    The database branch runs first, so reporting only the page branch's failure
+    throws away the databases the first branch found and points the user at the
+    sharing menu for a sharing problem they do not have. Candidates win; when
+    both branches found some, both lists are shown.
+    """
+    if database_error.candidates and not page_error.candidates:
+        return database_error
+    if database_error.candidates and page_error.candidates:
+        return ResolutionError(
+            f"'{ref}' does not name exactly one page or database. "
+            "Pass the URL of the one you mean.",
+            _dedupe(database_error.candidates + page_error.candidates),
+        )
+    # Neither branch found a candidate. The page branch's message is the more
+    # useful of the two identical shapes, and if the search request itself
+    # failed (bad token, rate limit) it carries that message verbatim.
+    return page_error
+
+
+def _dedupe(candidates: list[dict]) -> list[dict]:
+    seen = set()
+    out = []
+    for candidate in candidates:
+        key = (candidate.get("title"), candidate.get("url"))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(candidate)
+    return out[:MAX_CANDIDATES]

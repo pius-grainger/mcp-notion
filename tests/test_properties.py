@@ -59,6 +59,13 @@ def test_rollup_with_array_inner_type_flattens_nested_properties():
     assert "11111111-1111-1111-1111-111111111111" not in str(result)
 
 
+def test_rollup_array_item_that_is_not_a_property_object_is_passed_through():
+    """A rollup array can carry a bare scalar. Calling .get on it raised an
+    AttributeError straight out of query_database."""
+    result = read_value({"type": "rollup", "rollup": {"type": "array", "array": ["done", 3, None]}})
+    assert result == ["done", 3, None]
+
+
 def test_rollup_with_empty_array_inner_type():
     result = read_value({"type": "rollup", "rollup": {"type": "array", "array": []}})
     assert result == []

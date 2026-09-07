@@ -203,6 +203,21 @@ def test_html_after_a_quote_marker_is_rejected_with_its_line_number():
     assert "html" in caught.value.message.lower()
 
 
+def test_html_behind_two_stacked_block_markers_is_rejected():
+    """Markers stack. Stripping one level leaves the tag hidden behind the second,
+    and the line writes through as a bullet containing literal "> <div>x</div>"."""
+    with pytest.raises(MarkdownError) as caught:
+        markdown_to_blocks("fine\n\n- > <div>x</div>")
+    assert caught.value.line == 3
+    assert "html" in caught.value.message.lower()
+
+
+def test_a_table_row_behind_two_stacked_block_markers_is_rejected():
+    with pytest.raises(MarkdownError) as caught:
+        markdown_to_blocks("> - | a | b |")
+    assert "table" in caught.value.message.lower()
+
+
 def test_a_table_row_after_a_bullet_marker_is_rejected_with_its_line_number():
     with pytest.raises(MarkdownError) as caught:
         markdown_to_blocks("fine\n\n- | a | b |")

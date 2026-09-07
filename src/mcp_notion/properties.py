@@ -35,8 +35,10 @@ def read_value(prop: dict) -> object:
         inner = (value or {}).get("type") or ""
         inner_value = (value or {}).get(inner)
         if inner == "array":
-            # Rollup over relation/people/files: recursively flatten nested properties
-            return [read_value(item) for item in inner_value or []]
+            # Rollup over relation/people/files: recursively flatten nested
+            # properties. An item that is not a property object (a rollup of a
+            # formula can yield a bare scalar) is passed through as it stands.
+            return [read_value(item) if isinstance(item, dict) else item for item in inner_value or []]
         if inner == "date":
             # Flatten date values the same way as top-level date property
             if not inner_value:

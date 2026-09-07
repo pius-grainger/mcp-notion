@@ -1,8 +1,12 @@
 """Notion blocks <-> a documented markdown subset. Pure, no I/O.
 
-Supported both ways: headings 1-3, paragraph, bulleted list, numbered list,
-to-do, fenced code, quote, divider. Inline: bold, italic, inline code, links.
-Anything else is a visible placeholder on read and a hard error on write.
+Supported both ways at block level: headings 1-3, paragraph, bulleted list,
+numbered list, to-do, fenced code, quote, divider. Anything else is a visible
+placeholder on read and a hard error on write.
+
+Inline annotations (bold, italic, code, links) are asymmetric on purpose: they
+are rendered as markdown on read, and passed through as literal characters on
+write. See markdown_to_blocks for why.
 """
 
 import re
@@ -106,12 +110,23 @@ def _strip_block_prefix(line: str) -> str:
     so scanning the raw line misses a table or tag written after a bullet,
     numbered, to-do, quote, or heading marker (e.g. "- <div>x</div>"). Stripping
     the marker first lets those anchors see the real start of the content.
+
+    Markers stack ("- > <div>x</div>"), so this repeats until the line stops
+    changing; one pass would leave the tag hidden behind the second marker.
+    Each pass removes a prefix, so the line strictly shrinks, and an unchanged
+    line ends the loop regardless.
     """
-    for pattern in _PREFIX_PATTERNS:
-        match = pattern.match(line)
-        if match:
-            return match.group(match.re.groups)
-    return line
+    while True:
+        for pattern in _PREFIX_PATTERNS:
+            match = pattern.match(line)
+            if match:
+                stripped = match.group(match.re.groups)
+                break
+        else:
+            return line
+        if stripped == line:
+            return line
+        line = stripped
 
 
 class MarkdownError(Exception):
