@@ -83,6 +83,14 @@ def test_list_databases_reports_an_alias_that_matched_nothing(monkeypatch):
 
 
 @respx.mock
+def test_list_databases_reports_an_unparseable_alias_with_a_null_url(monkeypatch):
+    monkeypatch.setenv("NOTION_ALIAS_MYSTERY", "Not a URL or id")
+    respx.post(f"{NOTION_API_URL}/search").mock(return_value=listing([]))
+    entry = server.list_databases()[0]
+    assert entry["alias"] == "mystery" and entry["url"] is None
+
+
+@respx.mock
 def test_list_databases_reports_a_transport_error_as_a_single_element_list():
     respx.post(f"{NOTION_API_URL}/search").mock(
         return_value=httpx.Response(401, json={"object": "error", "message": "bad token"})
@@ -187,3 +195,9 @@ def test_search_returns_titles_urls_and_kinds():
 def test_search_rejects_an_unknown_kind():
     result = server.search("spec", kind="block")
     assert len(result) == 1 and "error" in result[0]
+
+
+@respx.mock
+def test_search_caps_results_at_the_documented_limit():
+    respx.post(f"{NOTION_API_URL}/search").mock(return_value=listing([PAGE_NODE] * 30))
+    assert len(server.search("spec")) == server.DEFAULT_LIMIT

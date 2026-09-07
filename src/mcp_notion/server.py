@@ -92,7 +92,11 @@ def list_databases() -> list[dict]:
         if database_id in by_id:
             by_id[database_id]["alias"] = name
         else:
-            listed.append({"title": None, "url": _page_url(database_id or ""), "alias": name})
+            # An alias value that yields no id (a title-like string, not a
+            # URL or id) has no URL to offer either. The alias name itself
+            # is still a valid `ref`, so it stays listed.
+            url = _page_url(database_id) if database_id else None
+            listed.append({"title": None, "url": url, "alias": name})
     return listed
 
 
@@ -182,6 +186,7 @@ def search(query: str, kind: str | None = None) -> list[dict]:
     """
     Search titles of pages and databases shared with this integration, as
     {title, url, kind}. Use it to find the URL to pass as a `ref`.
+    Returns at most 25 matches; narrow the query if you expect more.
     kind: "page", "database", or omitted for both.
     """
     if kind not in (None, "page", "database"):
