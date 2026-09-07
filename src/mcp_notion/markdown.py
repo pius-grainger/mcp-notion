@@ -67,7 +67,8 @@ def blocks_to_markdown(blocks: list[dict], depth: int = 0) -> str:
             # Visible, not silently dropped: the model can see something is there.
             rendered = f"<!-- unsupported: {kind} -->"
 
-        lines.append("\n".join(indent + line for line in rendered.split("\n")))
+        if rendered:
+            lines.append("\n".join(indent + line for line in rendered.split("\n")))
 
         children = block.get("children")
         if children:

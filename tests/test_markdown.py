@@ -84,3 +84,22 @@ def test_unsupported_block_becomes_a_visible_placeholder():
 
 def test_empty_block_list_is_an_empty_string():
     assert blocks_to_markdown([]) == ""
+
+
+def test_empty_paragraph_at_depth_zero():
+    # Empty paragraph at depth 0 should produce nothing
+    result = blocks_to_markdown([block("paragraph", rich_text=[])])
+    assert result == ""
+
+
+def test_empty_nested_paragraph_contributes_nothing():
+    # Empty paragraph nested under a parent should not leave stray whitespace
+    parent = block("bulleted_list_item", rich_text=[text("outer")])
+    parent["has_children"] = True
+    parent["children"] = [block("paragraph", rich_text=[])]  # Empty paragraph
+    result = blocks_to_markdown([parent])
+    # Should be just "- outer" with no trailing whitespace from the empty child
+    assert result == "- outer"
+    # Verify no stray indent from empty child
+    assert not result.endswith(" ")
+    assert "\n  " not in result  # No indented empty line
