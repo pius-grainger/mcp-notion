@@ -102,13 +102,30 @@ Successful resolutions are cached per process, keyed on the ref string.
 
 ## Markdown subset
 
-Supported in both directions:
+Supported in both directions, at block level: headings 1-3, paragraph, bulleted
+list, numbered list, to-do (`- [ ]` and `- [x]`), fenced code with language,
+blockquote, divider. Nested children are recursed to a depth of 3 and rendered
+indented.
 
-- Block level: headings 1-3, paragraph, bulleted list, numbered list, to-do
-  (`- [ ]` and `- [x]`), fenced code with language, blockquote, divider.
-- Inline: bold, italic, inline code, links, mapped to `rich_text`
-  annotations.
-- Nested children are recursed to a depth of 3 and rendered indented.
+Inline annotations — bold, italic, inline code, links — are deliberately
+asymmetric:
+
+- **Reading** renders a `rich_text` run's annotations as markdown, so a bold
+  run comes back as `**bold**` and a linked run as `[text](https://example.com)`.
+- **Writing** passes those characters through as literal text. `**bold**` is
+  written as one unannotated text run containing the eight characters
+  `**bold**`; it is not parsed into a bold annotation.
+
+The asymmetry is the point. A half-correct inline parser silently corrupts
+text — an unmatched asterisk, a bracket inside a code span, a parenthesis
+inside a URL — and silently corrupting a user's page is worse than a visible
+literal asterisk, which Notion renders acceptably as-is. Writing a correct
+inline parser is a larger job than the whole rest of this module and buys
+little for these workflows.
+
+The consequence, stated plainly because a caller will meet it: inline markup
+does not round-trip. Reading a bold run and appending the result back writes
+literal `**bold**`, not bold text.
 
 Reading a block type outside the subset yields a visible placeholder line,
 `<!-- unsupported: image -->`, rather than dropping content silently.
